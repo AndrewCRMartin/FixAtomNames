@@ -1,0 +1,28 @@
+Please find attached the PDB file for the structure I mentioned. I
+remember that Chi1 of H109 (VAL) of the first file (pdb4r97_0.cho)
+should be around 172, and that of the second file is around 174.
+
+pdbtorsions -s pdb4r97_0.cho | grep H109
+pdbtorsions -s 4r97_0.cho.abymod.v3.model | grep H109
+
+
+profit   pdb4r97_0.cho 4r97_0.cho.abymod.v3.model <<_EOF
+atoms n,ca,c,o,cb
+zone H108-H110
+fit
+ratoms *
+quit
+_EOF
+
+
+pdbgetzone H108 H110 pdb4r97_0.cho >pdb4r97_0:H108-H110.cho
+pdbgetzone H108 H110 4r97_0.cho.abymod.v3.model >4r97_0:H108-H110.model
+profit pdb4r97_0:H108-H110.cho 4r97_0:H108-H110.model <<_EOF
+atoms n,ca,c,o,cb
+fit
+ratoms *
+write 4r97_0:H108-H110.fit
+quit
+_EOF
+
+cat pdb4r97_0:H108-H110.cho 4r97_0:H108-H110.fit | pdbchain > both.pdb
