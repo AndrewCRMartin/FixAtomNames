@@ -1,229 +1,254 @@
-#include <stdio.h>
-#include <math.h>
+/************************************************************************/
+/**
 
+   \file       pdbflip.c
+   
+   \version    V2.0
+   \date       13.03.23
+   \brief      Standardise equivalent atom labelling
+   
+   \copyright  (c) UCL, Prof. Andrew C. R. Martin 1996-2023
+   \author     Prof. Andrew C. R. Martin
+   \par
+               Biomolecular Structure & Modelling Unit,
+               Department of Biochemistry & Molecular Biology,
+               University College,
+               Gower Street,
+               London.
+               WC1E 6BT.
+   \par
+               andrew@bioinf.org.uk
+               andrew.martin@ucl.ac.uk
+               
+**************************************************************************
+
+   This code is NOT IN THE PUBLIC DOMAIN, but it may be copied
+   according to the conditions laid out in the accompanying file
+   COPYING.DOC.
+
+   The code may be modified as required, but any modifications must be
+   documented so that the person responsible can be identified.
+
+   The code may not be sold commercially or included as part of a 
+   commercial product except as described in the file COPYING.DOC.
+
+**************************************************************************
+
+   Description:
+   ============
+
+**************************************************************************
+
+   Usage:
+   ======
+
+**************************************************************************
+
+   Revision History:
+   =================
+   
+-  V1.1   22.07.14 Renamed deprecated functions with bl prefix.
+                   Added doxygen annotation. By: CTP
+-  V1.2   19.08.14 Removed unused variable in DoFlipping() By: CTP
+-  V1.3   06.11.14 Renamed from flip
+-  V1.4   13.02.15 Added whole PDB support
+-  V1.5   12.03.15 Changed to allow multi-character chain names
+-  V2.0   13.03.23 Complete rewrite for new flipping code which is now
+                   in BiopLib
+
+*************************************************************************/
+/* Includes
+*/
+#include <stdio.h>
+
+#include "bioplib/SysDefs.h"
+#include "bioplib/general.h"
 #include "bioplib/pdb.h"
 #include "bioplib/macros.h"
 #include "bioplib/angle.h"
 #include "FixAtomLabels.h"
 
+/************************************************************************/
+/* Defines and macros
+*/
+#define MAXBUFF 160
+#define FAL_ERROR_VALUE 9999.0
+
+/************************************************************************/
+/* Globals
+*/
+
+
+/************************************************************************/
+/* Prototypes
+*/
 int main(int argc, char **argv);
-void DoAnalysis(PDB *pdb);
+BOOL ParseCmdLine(int argc, char **argv, char *infile, char *outfile,
+                  int *verbosity, BOOL *reportOnly);
+void Usage(void);
 
+/************************************************************************/
+/*>int main(int argc, char **argv)
+   -------------------------------
+*//**
+   Main program to flip sidechain equivalent atom naming
 
-
+-  08.11.96 Original   By: ACRM
+-  22.07.14 Renamed deprecated functions with bl prefix. By: CTP
+-  13.02.15 Added whole PDB support.  By: ACRM
+-  13.03.23 Complete rewrite to use new flip routines
+*/
 int main(int argc, char **argv)
 {
-   FILE *in;
+   FILE     *in        = stdin,
+            *out       = stdout;
+   int      verbosity  = 0;
+   BOOL     reportOnly = FALSE;
+   char     infile[MAXBUFF],
+            outfile[MAXBUFF];
+   WHOLEPDB *wpdb;
    
-   if((in=fopen(argv[1], "r"))!=NULL)
+   if(ParseCmdLine(argc, argv, infile, outfile, &verbosity, &reportOnly))
    {
-      PDB *pdb;
-      int natoms;
-      
-      if((pdb = blReadPDB(in, &natoms))!=NULL)
+      if(blOpenStdFiles(infile, outfile, &in, &out))
       {
-         printf("Before...\n");
-         DoAnalysis(pdb);
-         FixAtomLabels(pdb);
-         printf("After...\n");
-         DoAnalysis(pdb);
-         blWritePDB(stdout, pdb);
-         FREELIST(pdb, PDB);
+         if((wpdb = blReadWholePDB(in)) != NULL)
+         {
+            PDB *pdb;
+            pdb = wpdb->pdb;
+            if(reportOnly)
+            {
+               blPrintTorsionAtomLabels(out, pdb);
+            }
+            else
+            {
+               blFixAtomLabels(pdb, verbosity);
+               blWriteWholePDB(out, wpdb);
+            }
+            FREELIST(pdb, PDB);
+         }
+         else
+         {
+            fprintf(stderr,"No atoms read from PDB file\n");
+         }
       }
-      else
-      {
-         fprintf(stderr, "No atoms read from file %s\n", argv[1]);
-         return(1);
-      }
-      fclose(in);
    }
    else
    {
-      fprintf(stderr, "Can't read file %s\n", argv[1]);
-      return(1);
+      Usage();
    }
+
    return(0);
 }
 
-void DoAnalysis(PDB *pdb)
+
+/************************************************************************/
+/*>BOOL ParseCmdLine(int argc, char **argv, char *infile, char *outfile,
+                     int *verbosity, BOOL *reportOnly)
+   ---------------------------------------------------------------------
+*//**
+
+   \param[in]      argc         Argument count
+   \param[in]      **argv       Argument array
+   \param[out]     *infile      Input file (or blank string)
+   \param[out]     *outfile     Output file (or blank string)
+   \param[out]     *verbosity   Information level
+   \param[out]     *reportOnly  Report wrong residues rather than fixing
+   \return                      Success?
+
+   Parse the command line
+   
+-  08.11.96 Original    By: ACRM
+-  13.02.23 Updated for V2.0
+*/
+BOOL ParseCmdLine(int argc, char **argv, char *infile, char *outfile,
+                  int *verbosity, BOOL *reportOnly)
 {
-   PDB *res     = NULL,
-       *nextres = NULL;
+   argc--;
+   argv++;
 
-   for(res=pdb; res!=NULL; res=nextres)
+   infile[0]   = outfile[0] = '\0';
+   *verbosity  = 0;
+   *reportOnly = FALSE;
+   
+   while(argc)
    {
-      nextres = blFindNextResidue(res);
-      if(!strncmp(res->resnam, "LEU", 3))
+      if(argv[0][0] == '-')
       {
-         PDB *CA, *CB, *CG, *CD1, *CD2;
-         REAL tor1, tor2, diff;
-         char label[16];
-            
-         CA  = blFindAtomInRes(res, "CA  ");
-         CB  = blFindAtomInRes(res, "CB  ");
-         CG  = blFindAtomInRes(res, "CG  ");
-         CD1 = blFindAtomInRes(res, "CD1 ");
-         CD2 = blFindAtomInRes(res, "CD2 ");
-         
-         tor1 = CalcTorsion(CA, CB, CG, CD1, FALSE);
-         tor2 = CalcTorsion(CA, CB, CG, CD2, FALSE);
-
-         diff = CalcAngleDiff(tor1, tor2);
-         strcpy(label, "OK");
-         
-         if((diff < 90) || (diff > 180))
-            strcpy(label, "SWAPPED!");
-         
-         printf("%s Tor1: %8.3f Tor2: %8.3f Diff: %8.3f %s\n",
-                res->resnam, tor1, tor2, diff, label);
-
-      }
-      else if(!strncmp(res->resnam, "VAL", 3))
-      {
-         PDB *N, *CA, *CB, *CG1, *CG2;
-         REAL tor1, tor2, diff;
-         char label[16];
-            
-         N   = blFindAtomInRes(res, "N   ");
-         CA  = blFindAtomInRes(res, "CA  ");
-         CB  = blFindAtomInRes(res, "CB  ");
-         CG1 = blFindAtomInRes(res, "CG1 ");
-         CG2 = blFindAtomInRes(res, "CG2 ");
-         
-         tor1 = CalcTorsion(N, CA, CB, CG1, FALSE);
-         tor2 = CalcTorsion(N, CA, CB, CG2, FALSE);
-
-         diff = CalcAngleDiff(tor1, tor2);
-         strcpy(label, "OK");
-         
-         if((diff < 90) || (diff > 180))
-            strcpy(label, "SWAPPED!");
-         
-         printf("VAL  Tor1: %8.3f Tor2: %8.3f Diff: %8.3f %s\n",
-                tor1, tor2, diff, label);
-
-      }
-      else if(!strncmp(res->resnam, "ILE", 3))
-      {
-         PDB  *N, *CA, *CB, *CG1, *CG2;
-         REAL tor1, tor2, diff;
-         char label[16];
-            
-         N   = blFindAtomInRes(res, "N   ");
-         CA  = blFindAtomInRes(res, "CA  ");
-         CB  = blFindAtomInRes(res, "CB  ");
-         CG1 = blFindAtomInRes(res, "CG1 ");
-         CG2 = blFindAtomInRes(res, "CG2 ");
-
-         /* Note this is the other way round! */
-         tor1 = CalcTorsion(N, CA, CB, CG2, FALSE);
-         tor2 = CalcTorsion(N, CA, CB, CG1, FALSE);
-
-         diff = CalcAngleDiff(tor1, tor2);
-         strcpy(label, "OK");
-         
-         if((diff < 90) || (diff > 180))
-            strcpy(label, "SWAPPED!");
-         
-         printf("ILE  Tor1: %8.3f Tor2: %8.3f Diff: %8.3f %s\n",
-                tor1, tor2, diff, label);
-
-      }
-      else if(!strncmp(res->resnam, "PHE", 3) ||
-              !strncmp(res->resnam, "TYR", 3))
-      {
-         PDB *CA, *CB, *CG, *CD1, *CD2;
-         REAL tor1, tor2;
-         char label[16];
-            
-         CA  = blFindAtomInRes(res, "CA  ");
-         CB  = blFindAtomInRes(res, "CB  ");
-         CG  = blFindAtomInRes(res, "CG  ");
-         CD1 = blFindAtomInRes(res, "CD1 ");
-         CD2 = blFindAtomInRes(res, "CD2 ");
-         
-         tor1 = CalcTorsion(CA, CB, CG, CD1, FALSE);
-         tor2 = CalcTorsion(CA, CB, CG, CD2, FALSE);
-
-         strcpy(label, "OK");
-         
-         if(NeedToSwapSP2Atoms(tor1, tor2))
-            strcpy(label, "SWAPPED!");
-         
-         printf("%s Tor1: %8.3f Tor2: %8.3f %s\n",
-                res->resnam, tor1, tor2, label);
-
-      }
-      else if(!strncmp(res->resnam, "ASP", 3))
-      {
-         PDB *CA, *CB, *CG, *OD1, *OD2;
-         REAL tor1, tor2;
-         char label[16];
-            
-         CA  = blFindAtomInRes(res, "CA  ");
-         CB  = blFindAtomInRes(res, "CB  ");
-         CG  = blFindAtomInRes(res, "CG  ");
-         OD1 = blFindAtomInRes(res, "OD1 ");
-         OD2 = blFindAtomInRes(res, "OD2 ");
-         
-         tor1 = CalcTorsion(CA, CB, CG, OD1, FALSE);
-         tor2 = CalcTorsion(CA, CB, CG, OD2, FALSE);
-
-         strcpy(label, "OK");
-         if(NeedToSwapSP2Atoms(tor1, tor2))
+         switch(argv[0][1])
          {
-            strcpy(label, "SWAPPED!");
+         case 'v':
+            *verbosity = 1;
+            if(argv[0][2] == 'v')
+               *verbosity=2;
+            break;
+         case 'r':
+            *reportOnly = TRUE;
+            break;
+         default:
+            return(FALSE);
+            break;
          }
-         printf("%s Tor1: %8.3f Tor2: %8.3f %s\n",
-                res->resnam, tor1, tor2, label);
       }
-      else if(!strncmp(res->resnam, "GLU", 3))
+      else
       {
-         PDB  *CB, *CG, *CD, *OE1, *OE2;
-         REAL tor1, tor2;
-         char label[16];
-            
-         CB  = blFindAtomInRes(res, "CB  ");
-         CG  = blFindAtomInRes(res, "CG  ");
-         CD  = blFindAtomInRes(res, "CD  ");
-         OE1 = blFindAtomInRes(res, "OE1 ");
-         OE2 = blFindAtomInRes(res, "OE2 ");
+         /* Check that there are only 1 or 2 arguments left             */
+         if(argc > 2)
+            return(FALSE);
          
-         tor1 = CalcTorsion(CB, CG, CD, OE1, FALSE);
-         tor2 = CalcTorsion(CB, CG, CD, OE2, FALSE);
-
-         strcpy(label, "OK");
-         if(NeedToSwapSP2Atoms(tor1, tor2))
-         {
-            strcpy(label, "SWAPPED!");
-         }
+         /* Copy the first to infile                                    */
+         strcpy(infile, argv[0]);
          
-         printf("%s Tor1: %8.3f Tor2: %8.3f %s\n",
-                res->resnam, tor1, tor2, label);
-      }
-      else if(!strncmp(res->resnam, "ARG", 3))
-      {
-         PDB  *CD, *NE, *CZ, *NH1, *NH2;
-         REAL tor1, tor2;
-         char label[16];
+         /* If there's another, copy it to outfile                      */
+         argc--;
+         argv++;
+         if(argc)
+            strcpy(outfile, argv[0]);
             
-         CD  = blFindAtomInRes(res, "CD  ");
-         NE  = blFindAtomInRes(res, "NE  ");
-         CZ  = blFindAtomInRes(res, "CZ  ");
-         NH1 = blFindAtomInRes(res, "NH1 ");
-         NH2 = blFindAtomInRes(res, "NH2 ");
-
-         tor1 = CalcTorsion(CD, NE, CZ, NH1, FALSE);
-         tor2 = CalcTorsion(CD, NE, CZ, NH2, FALSE);
-
-         strcpy(label, "OK");
-         if(NeedToSwapSP2Atoms(tor1, tor2))
-         {
-            strcpy(label, "SWAPPED!");
-         }
-         printf("%s Tor1: %8.3f Tor2: %8.3f %s\n",
-                res->resnam, tor1, tor2, label);
+         return(TRUE);
       }
+      argc--;
+      argv++;
    }
+   
+   return(TRUE);
 }
+
+
+/************************************************************************/
+/*>void Usage(void)
+   ----------------
+*//**
+
+   Prints a usage message
+
+-  08.11.96 Original   By: ACRM
+-  22.07.14 V1.1 By: CTP
+-  06.11.14 V1.2 By: ACRM
+-  12.03.15 V1.5
+-  13.03.23 V2.0
+*/
+void Usage(void)
+{
+   fprintf(stderr,"\npdbflip V2.0 (c) 2014-2023 Prof. Andrew C.R. \
+Martin, UCL\n");
+   fprintf(stderr,"\nUsage: pdbflip [-v[v]] [-r] [in.pdb [out.pdb]]\n");
+   fprintf(stderr,"               -v   Report fixed atoms\n");
+   fprintf(stderr,"               -vv  Report unfixed atoms as well\n");
+   fprintf(stderr,"               -r   Only report atoms rather than \
+fixing\n");
+
+   fprintf(stderr,"\npdbflip V2 is a much-improved program for fixing \
+the names of\n");
+   printf("symmetrical atoms in ARG, ASP, GLU, PHE, TYR, LEU and VAL.\n");
+   printf("This new version simply swaps the coordinates rather than \
+trying to worry\n");
+   printf("explicitly about connectivity, etc., making the code much \
+simpler. It \n");
+   printf("still assumes that the connectivity is correct (e.g. in PHE, \
+CE1 is\n");
+   printf("connected to CD1 and CE2 is connected to CD2).\n");
+   printf("\nLEU and VAL were not handled by the old version.\n\n");
+}
+
 
